@@ -8,6 +8,7 @@ from multiprocessing.dummy import Pool as ThreadPool
 import os
 from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
+from time import sleep
 
 pd.options.mode.chained_assignment = None
 CURRENT_SHEET = None
@@ -15,7 +16,7 @@ EXCEL_FILENAME = "test.xlsx"
 OUTPUT_FOLDER = "output/"
 EXCEL_OUTPUT = "_out.xlsx"
 MAX_THREADS = 100
-SAVE_EVERY_ROWS = 1000
+SAVE_EVERY_ROWS = 2000
 START_FROM = 0
 AUTH_KEY = os.environ.get('AUTH_KEY')
 
@@ -24,7 +25,7 @@ headers = {
     'content-type': 'application/json',
     'authorization': AUTH_KEY
 }
-retries = Retry(total=4, backoff_factor=1, status_forcelist=[ 502, 503, 504 ])
+retries = Retry(total=4, backoff_factor=1)
 s.mount('http://', HTTPAdapter(max_retries=retries))
 s.headers.update(headers)
 
@@ -43,7 +44,7 @@ def parse_row(row_number):
 
     row[4] = rest_data['distance']
     row[5] = rest_data['amount']
-    update_row(CURRENT_SHEET, row_number, row)
+    #update_row(CURRENT_SHEET, row_number, row)
     return {row_number: row}
 
 
@@ -92,12 +93,17 @@ def get_x_y(post_code, city):
     else:
         #print("REQUEST: " + cache_key)
         try:
-            r = s.post(url, data=json.dumps(data))
-            r_json = json.loads(r.content)
-            x = r_json['results'][0]['location']["referenceCoordinate"]["x"]
-            y = r_json['results'][0]['location']["referenceCoordinate"]["y"]
-            XY_CACHE[cache_key] = {"x": x, "y": y}
-            return {"x": x, "y": y}
+            for i in range(0, 3):
+                r = s.post(url, data=json.dumps(data))
+                r_json = json.loads(r.content)
+                x = r_json['results'][0]['location']["referenceCoordinate"]["x"]
+                y = r_json['results'][0]['location']["referenceCoordinate"]["y"]
+
+                if not x or not y:
+                    sleep(1)
+                    continue
+                XY_CACHE[cache_key] = {"x": x, "y": y}
+                return {"x": x, "y": y}
         except requests.exceptions.Timeout as e:
             # Maybe set up for a retry, or continue in a retry loop
             print e
@@ -157,9 +163,16 @@ def get_distance(x1, y1, x2, y2):
     }
 
     try:
-        r = s.post(url, data=json.dumps(data))
-        r_json = json.loads(r.content)
-        return { "distance": r_json["distance"], "amount": r_json["toll"]["summary"]["costs"][0]["amount"] }
+        for i in range(0, 3):
+            r = s.post(url, data=json.dumps(data))
+            r_json = json.loads(r.content)
+            distance = r_json["distance"]
+            amount = r_json["toll"]["summary"]["costs"][0]["amount"]
+            if not distance or not amount:
+                print("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")
+                sleep(1)
+                continue
+            return { "distance": distance, "amount": amount }
     except requests.exceptions.Timeout as e:
         # Maybe set up for a retry, or continue in a retry loop
         print e
@@ -207,6 +220,11 @@ def processSheet(sheet, sheet_name):
     while True:
         print("Loop from: " + str(from_id) + " to: " + str(to_id))
         data = pool.map(parse_row, range(from_id, to_id+1))
+
+        for item in data:
+            for id, val in item.items():
+                update_row(CURRENT_SHEET, id, val)
+
         save_to_excel(CURRENT_SHEET, sheet_name + "_0_" + str(to_id) + "_")
 
         if break_next_loop:
