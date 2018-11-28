@@ -6,6 +6,8 @@ import openpyxl
 import threading
 from multiprocessing.dummy import Pool as ThreadPool
 import os
+from requests.adapters import HTTPAdapter
+from requests.packages.urllib3.util.retry import Retry
 
 pd.options.mode.chained_assignment = None
 CURRENT_SHEET = None
@@ -13,9 +15,19 @@ EXCEL_FILENAME = "test.xlsx"
 OUTPUT_FOLDER = "output/"
 EXCEL_OUTPUT = "_out.xlsx"
 MAX_THREADS = 100
-SAVE_EVERY_ROWS = 500
-START_FROM = 4005
+SAVE_EVERY_ROWS = 1000
+START_FROM = 0
 AUTH_KEY = os.environ.get('AUTH_KEY')
+
+s = requests.Session()
+headers = {
+    'content-type': 'application/json',
+    'authorization': AUTH_KEY
+}
+retries = Retry(total=4, backoff_factor=1, status_forcelist=[ 502, 503, 504 ])
+s.mount('http://', HTTPAdapter(max_retries=retries))
+s.headers.update(headers)
+
 
 def parse_row(row_number):
     print("Parse row: " + str(row_number))
@@ -62,11 +74,6 @@ def get_x_y(post_code, city):
     global XY_CACHE
     url = "https://xserver2-europe-eu-test.cloud.ptvgroup.com/services/rs/XLocate/searchLocations"
 
-    headers = {
-        'content-type': 'application/json',
-        'authorization': AUTH_KEY
-    }
-
     data = {
         "$type": "SearchByAddressRequest",
         "scope": "globalscope",
@@ -85,7 +92,7 @@ def get_x_y(post_code, city):
     else:
         #print("REQUEST: " + cache_key)
         try:
-            r = requests.post(url, data=json.dumps(data), headers=headers, timeout=10)
+            r = s.post(url, data=json.dumps(data))
             r_json = json.loads(r.content)
             x = r_json['results'][0]['location']["referenceCoordinate"]["x"]
             y = r_json['results'][0]['location']["referenceCoordinate"]["y"]
@@ -111,11 +118,6 @@ def get_x_y(post_code, city):
 DISTANCE_CACHE = {}
 def get_distance(x1, y1, x2, y2):
     url = "https://xserver2-europe-eu-test.cloud.ptvgroup.com/services/rs/XRoute/calculateRoute"
-
-    headers = {
-        'content-type': 'application/json',
-        'authorization': AUTH_KEY
-    }
 
     data = {
         "waypoints": [
@@ -155,7 +157,7 @@ def get_distance(x1, y1, x2, y2):
     }
 
     try:
-        r = requests.post(url, data=json.dumps(data), headers=headers, timeout=10)
+        r = s.post(url, data=json.dumps(data))
         r_json = json.loads(r.content)
         return { "distance": r_json["distance"], "amount": r_json["toll"]["summary"]["costs"][0]["amount"] }
     except requests.exceptions.Timeout as e:
