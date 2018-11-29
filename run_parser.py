@@ -7,7 +7,6 @@ import threading
 from multiprocessing.dummy import Pool as ThreadPool
 import os
 from requests.adapters import HTTPAdapter
-from requests.packages.urllib3.util.retry import Retry
 from time import sleep
 
 pd.options.mode.chained_assignment = None
@@ -15,23 +14,22 @@ CURRENT_SHEET = None
 EXCEL_FILENAME = "test.xlsx"
 OUTPUT_FOLDER = "output/"
 EXCEL_OUTPUT = "_out.xlsx"
-MAX_THREADS = 100
-SAVE_EVERY_ROWS = 2000
-START_FROM = 0
+MAX_THREADS = 3
+SAVE_EVERY_ROWS = 100
+START_FROM = 5000
 AUTH_KEY = os.environ.get('AUTH_KEY')
 
 s = requests.Session()
 headers = {
     'content-type': 'application/json',
-    'authorization': AUTH_KEY
+    'authorization': 'Basic eHRvazpiOTI0Nzg5Zi03OTFjLTRmNzEtOTA4NS1iOGRhZDY5MTU5YTM='
 }
-retries = Retry(total=4, backoff_factor=1)
-s.mount('http://', HTTPAdapter(max_retries=retries))
+s.mount('http://', HTTPAdapter())
 s.headers.update(headers)
 
 
 def parse_row(row_number):
-    print("Parse row: " + str(row_number))
+    # print("Parse row: " + str(row_number))
     global CURRENT_SHEET
     ''' function update data in row,
     currently it add "aaa" text to distance, later should be request method here to get value '''
@@ -74,15 +72,16 @@ XY_CACHE = {}
 def get_x_y(post_code, city):
     global XY_CACHE
     url = "https://xserver2-europe-eu-test.cloud.ptvgroup.com/services/rs/XLocate/searchLocations"
-
+    # print("Postal-Code: " + post_code)
     data = {
         "$type": "SearchByAddressRequest",
         "scope": "globalscope",
         "storedProfile": "default",
         "coordinateFormat": "EPSG:4326",
         "address": {
-            "postalCode": post_code,
-            "city": city
+            "country": "Polska",
+            "postalCode": str(post_code),
+            "city": str(city)
         }
     }
 
@@ -98,26 +97,28 @@ def get_x_y(post_code, city):
                 r_json = json.loads(r.content)
                 x = r_json['results'][0]['location']["referenceCoordinate"]["x"]
                 y = r_json['results'][0]['location']["referenceCoordinate"]["y"]
-
+                match_quality_postal_code = r_json['results'][0]['matchQuality']["addressScores"]["postalCode"]
                 if not x or not y:
                     sleep(1)
                     continue
-                XY_CACHE[cache_key] = {"x": x, "y": y}
-                return {"x": x, "y": y}
+                if match_quality_postal_code <= 80:
+                    XY_CACHE[cache_key] = {"x": x, "y": y}
+                    return {"x": x, "y": y}
+                return False
         except requests.exceptions.Timeout as e:
             # Maybe set up for a retry, or continue in a retry loop
-            print e
+            print(e)
             return False
         except requests.exceptions.TooManyRedirects as e:
             # Tell the user their URL was bad and try a different one
-            print e
+            print(e)
             return False
         except requests.exceptions.RequestException as e:
             # catastrophic error. bail.
-            print e
+            print(e)
             return False
         except Exception as e:
-            print e
+            print(e)
             return False
 
 
@@ -149,7 +150,7 @@ def get_distance(x1, y1, x2, y2):
         "requestProfile": {
             "routingProfile": {
                 "course": {
-                    "distanceTimeWeighting": 50
+                    "distanceTimeWeighting": 30
                 }
             }
         },
@@ -166,27 +167,31 @@ def get_distance(x1, y1, x2, y2):
         for i in range(0, 3):
             r = s.post(url, data=json.dumps(data))
             r_json = json.loads(r.content)
-            distance = r_json["distance"]
-            amount = r_json["toll"]["summary"]["costs"][0]["amount"]
-            if not distance or not amount:
-                print("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")
+            try:
+                distance = r_json["distance"]
+            except Exception:
                 sleep(1)
                 continue
+            try:
+                amount = r_json["toll"]["summary"]["costs"][0]["amount"]
+            except Exception:
+                amount = 0
+
             return { "distance": distance, "amount": amount }
     except requests.exceptions.Timeout as e:
         # Maybe set up for a retry, or continue in a retry loop
-        print e
+        print(e)
         return False
     except requests.exceptions.TooManyRedirects as e:
         # Tell the user their URL was bad and try a different one
-        print e
+        print(e)
         return False
     except requests.exceptions.RequestException as e:
         # catastrophic error. bail.
-        print e
+        print(e)
         return False
     except Exception as e:
-        print e
+        print(e)
         return False
 
 
